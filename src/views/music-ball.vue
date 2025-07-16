@@ -1,7 +1,7 @@
 <template>
     <div>
         <input type="file" @change="handleFileUpload" accept=".mid,.midi" />
-        <button @click="playWindChime">播放风铃音色</button>
+        <button @click="playWindChime">播放钢琴音色</button>
         <div ref="scoreContainer"></div>
     </div>
 </template>
@@ -9,27 +9,12 @@
 <script setup>
     import { ref } from 'vue'
     import { Midi } from '@tonejs/midi'
-    import * as Tone from 'tone'
+    import Soundfont from 'soundfont-player'
 
     const scoreContainer = ref(null)
     let midiData = null
-
-    // 优化后的风铃音色合成器，更空灵、通透
-    const windChimeSynth = new Tone.PolySynth(Tone.MetalSynth, {
-        maxPolyphony: 8,
-        options: {
-            frequency: 900,
-            envelope: {
-                attack: 0.001,
-                decay: 0.3,
-                release: 2.5,
-            },
-            harmonicity: 8,
-            modulationIndex: 40,
-            resonance: 700,
-            octaves: 2.5,
-        },
-    }).toDestination()
+    let piano = null
+    let audioCtx = null
 
     // 处理MIDI文件上传
     const handleFileUpload = async (e) => {
@@ -37,57 +22,47 @@
         const arrayBuffer = await file[0].arrayBuffer()
         midiData = new Midi(arrayBuffer)
         console.log('MIDI解析完成:', midiData)
+        // 初始化Soundfont钢琴
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+        piano = await Soundfont.instrument(audioCtx, 'acoustic_grand_piano')
     }
 
-    // 使用 Tone.Part 实现和弦/同一时刻多音播放
-    const playWindChime = () => {
-        if (!midiData) return
+    // 使用 Soundfont 播放和弦
+    async function playWindChime() {
+        if (!midiData || !piano) return
 
-        Tone.start()
-        Tone.Transport.stop()
-        Tone.Transport.cancel()
-
-        // 收集所有音符事件
-        const events = []
+        // 确保 audioCtx 已 resume
+        if (audioCtx.state === 'suspended') {
+            await audioCtx.resume()
+        }
+        piano.stop && piano.stop()
+        // 收集所有音符
+        const notes = []
         midiData.tracks.forEach((track) => {
-            track.notes.forEach((note) => {
-                events.push({
-                    time: note.time,
-                    note: note.name,
-                    duration: note.duration,
-                    velocity: note.velocity,
-                })
+            notes.push(...track.notes)
+        })
+
+        const BATCH_SIZE = 10
+        let currentIndex = 0
+        const startTime = audioCtx.currentTime
+
+        // 分批调度函数
+        function scheduleBatch(fromIdx) {
+            const batch = notes.slice(fromIdx, fromIdx + BATCH_SIZE)
+            batch.forEach((note) => {
+                const when = startTime + note.time
+                piano.play(note.name, when, { gain: note.velocity, duration: note.duration })
             })
-        })
 
-        // 按时间分组，解决同一时刻和弦问题
-        const grouped = {}
-        events.forEach((e) => {
-            if (!grouped[e.time]) grouped[e.time] = []
-            grouped[e.time].push(e)
-        })
+            // 如果还有下一批，设置定时器在第40个音符的time时调度
+            if (fromIdx + BATCH_SIZE < notes.length) {
+                const nextTime = batch[Math.floot(BATCH_SIZE / 2)].time
+                setTimeout(() => {
+                    scheduleBatch(fromIdx + BATCH_SIZE)
+                }, nextTime * 1000)
+            }
+        }
 
-        // 转换为 Tone.Part 需要的格式
-        const partEvents = Object.entries(grouped).map(([time, notes]) => ({
-            time: parseFloat(time),
-            notes: notes.map((n) => ({
-                name: n.note,
-                duration: n.duration,
-                velocity: n.velocity,
-            })),
-        }))
-
-        // 创建 Tone.Part
-        const part = new Tone.Part((time, value) => {
-            // 支持和弦
-            windChimeSynth.triggerAttackRelease(
-                value.notes.map((n) => n.name),
-                value.notes[0].duration,
-                time,
-                value.notes[0].velocity,
-            )
-        }, partEvents).start(0)
-
-        Tone.Transport.start()
+        scheduleBatch(0)
     }
 </script>
