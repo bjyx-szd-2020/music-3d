@@ -1,14 +1,9 @@
 <template>
     <div class="main-bg">
-        <h1>🎼 MIDI音乐播放Demo</h1>
-        <div>
-            <input type="file" @change="handleFileUpload" accept=".mid,.midi" />
-            <button :disabled="loading" @click="playWindChime">播放钢琴音色</button>
-            <div ref="threeContainer" style="width: 800px; height: 500px; margin: 0 auto"></div>
-        </div>
-        <footer>
-            <small>Made with Vue 3 + Vite + TypeScript + soundfont-player + @tonejs/midi + three.js</small>
-        </footer>
+        <button style="position: absolute; top: 20px; right: 20px" :disabled="loading" @click="playWindChime"
+            >播放钢琴音色</button
+        >
+        <div ref="threeContainer" style="height: 100%; margin: 0 auto"></div>
     </div>
 </template>
 
@@ -38,8 +33,11 @@
 
     onMounted(() => {
         // 初始化Three.js场景
+        const containerHeight = threeContainer.value.clientHeight || window.innerHeight
+        const containerWidth = Math.floor(containerHeight * 0.72)
+        threeContainer.value.style.width = `${containerWidth}px`
 
-        initThree()
+        initThree(containerWidth, containerHeight)
         renderLoop()
         setTimeout(() => {
             handleFileUpload()
@@ -52,19 +50,19 @@
     })
 
     // Three.js 场景初始化
-    function initThree() {
+    function initThree(containerWidth, containerHeight) {
         if (renderer) {
             renderer.dispose?.()
             threeContainer.value.innerHTML = ''
         }
         scene = new THREE.Scene()
-        camera = new THREE.PerspectiveCamera(45, 800 / 500, 0.1, 1000)
+        camera = new THREE.PerspectiveCamera(45, containerWidth / containerHeight, 0.1, 1000)
         // 相机俯视或斜视
-        camera.position.set(0, 20, 30)
+        camera.position.set(0, 6, 20)
         camera.lookAt(0, 0, 0)
 
         renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-        renderer.setSize(800, 500)
+        renderer.setSize(containerWidth, containerHeight)
         renderer.toneMapping = THREE.ACESFilmicToneMapping
         renderer.toneMappingExposure = 1.1
         renderer.outputColorSpace = THREE.SRGBColorSpace
@@ -85,59 +83,50 @@
         scene.add(light)
         scene.add(new THREE.AmbientLight(0xffffff, 0.5))
 
-        // 环境贴图异步加载
-        const loader = new THREE.CubeTextureLoader()
-        loader.load(
-            [
-                'https://threejs.org/examples/textures/cube/Bridge2/posx.jpg',
-                'https://threejs.org/examples/textures/cube/Bridge2/negx.jpg',
-                'https://threejs.org/examples/textures/cube/Bridge2/posy.jpg',
-                'https://threejs.org/examples/textures/cube/Bridge2/negy.jpg',
-                'https://threejs.org/examples/textures/cube/Bridge2/posz.jpg',
-                'https://threejs.org/examples/textures/cube/Bridge2/negz.jpg',
-            ],
-            (envTexture) => {
-                scene.environment = envTexture
-                scene.background = envTexture
+        scene.background = createTileTexture()
 
-                // 球体材质
-                const ballMat = new THREE.MeshPhysicalMaterial({
-                    color: 0xffffff,
-                    metalness: 0.7,
-                    roughness: 0.05,
-                    transmission: 1,
-                    thickness: 1.2,
-                    ior: 1.45,
-                    envMap: envTexture,
-                    envMapIntensity: 1.2,
-                    clearcoat: 1,
-                    clearcoatRoughness: 0.1,
-                    reflectivity: 0.8,
-                    transparent: true,
-                    opacity: 0.92,
-                    sheen: 1,
-                    sheenColor: new THREE.Color(0x66ccff),
-                    sheenRoughness: 0.2,
-                })
+        // 创建彩色发光球体
+        const ballGeo = new THREE.SphereGeometry(0.5, 64, 64)
+        const colors = []
+        const colorList = [
+            new THREE.Color(0xff66cc), // 粉
+            new THREE.Color(0x66ccff), // 蓝
+            new THREE.Color(0x99ff66), // 绿
+            new THREE.Color(0xffff66), // 黄
+            new THREE.Color(0xff9966), // 橙
+            new THREE.Color(0xcc66ff), // 紫
+        ]
+        for (let i = 0; i < ballGeo.attributes.position.count; i++) {
+            // 按顶点分段渐变
+            const color = colorList[i % colorList.length]
+            colors.push(color.r, color.g, color.b)
+        }
+        ballGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
 
-                // 球体
-                const ballGeo = new THREE.SphereGeometry(1, 64, 64)
-                ball = new THREE.Mesh(ballGeo, ballMat)
-                ball.position.set(0, 10 + 2, 0) // y=12，刚好在最上方
-                scene.add(ball)
+        const ballMat = new THREE.MeshStandardMaterial({
+            vertexColors: true, // 启用顶点颜色
+            metalness: 0.2,
+            roughness: 0.2,
+            transparent: true,
+            opacity: 0.95,
+            emissive: 0xffffff, // 发光颜色（白色，和顶点色混合）
+            emissiveIntensity: 2.5, // 发光强度（可调大一点）
+        })
 
-                // 球体外发光轮廓
-                const glowGeo = new THREE.SphereGeometry(1.08, 64, 64)
-                const glowMat = new THREE.MeshBasicMaterial({
-                    color: 0x66ccff,
-                    transparent: true,
-                    opacity: 0.18,
-                    side: THREE.BackSide,
-                })
-                const glow = new THREE.Mesh(glowGeo, glowMat)
-                ball.add(glow)
-            },
-        )
+        const ball = new THREE.Mesh(ballGeo, ballMat)
+        ball.position.set(0, 7, 0)
+        scene.add(ball)
+
+        // 可选：外发光轮廓
+        const glowGeo = new THREE.SphereGeometry(0.52, 64, 64)
+        const glowMat = new THREE.MeshBasicMaterial({
+            color: 0x66ccff,
+            transparent: true,
+            opacity: 0.18,
+            side: THREE.BackSide,
+        })
+        const glow = new THREE.Mesh(glowGeo, glowMat)
+        ball.add(glow)
     }
     // 2. 生成纵向排列的音乐板
     function createNoteBars(notes) {
@@ -196,9 +185,14 @@
             stand1.rotation.x = Math.PI / 2
             stand1.position.set(0, -0.55, -2.5)
             bar.add(stand1)
+            // 支架底座
+            const stand2 = new THREE.Mesh(new THREE.CylinderGeometry(standRadius, standRadius * 5, 0.6, 16), standMat)
+            stand2.rotation.x = Math.PI / 2
+            stand2.position.set(0, -0.55, -4.5)
+            bar.add(stand2)
 
             // 纵向排列
-            bar.position.set(0, 10 - i * 2.2, 0)
+            bar.position.set(0, 5 - i * 2.2, 0)
             scene.add(bar)
             noteBars.push({ midi, mesh: bar, x: bar.position.x, y: bar.position.y })
         })
@@ -300,6 +294,31 @@
             }, delay * 1000)
         }
         scheduleNextNote()
+    }
+
+    function createTileTexture() {
+        const size = 512
+        const tile = 128
+        const canvas = document.createElement('canvas')
+        canvas.width = canvas.height = size
+        const ctx = canvas.getContext('2d')
+        ctx.fillStyle = '#222a38'
+        ctx.fillRect(0, 0, size, size)
+        ctx.strokeStyle = '#444'
+        ctx.lineWidth = 2
+        for (let x = 0; x <= size; x += tile) {
+            ctx.beginPath()
+            ctx.moveTo(x, 0)
+            ctx.lineTo(x, size)
+            ctx.stroke()
+        }
+        for (let y = 0; y <= size; y += tile) {
+            ctx.beginPath()
+            ctx.moveTo(0, y)
+            ctx.lineTo(size, y)
+            ctx.stroke()
+        }
+        return new THREE.CanvasTexture(canvas)
     }
 </script>
 
