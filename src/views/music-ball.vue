@@ -38,8 +38,12 @@
 
     onMounted(() => {
         // 初始化Three.js场景
+
         initThree()
         renderLoop()
+        setTimeout(() => {
+            handleFileUpload()
+        }, 1000)
     })
 
     onBeforeUnmount(() => {
@@ -56,7 +60,7 @@
         scene = new THREE.Scene()
         camera = new THREE.PerspectiveCamera(45, 800 / 500, 0.1, 1000)
         // 相机俯视或斜视
-        camera.position.set(0, 15, 30)
+        camera.position.set(0, 20, 30)
         camera.lookAt(0, 0, 0)
 
         renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
@@ -140,10 +144,16 @@
         noteBars.forEach((bar) => scene.remove(bar.mesh))
         noteBars = []
         // 取前16个不同音高
-        const uniquePitches = [...new Set(notes.map((n) => n.midi))].sort((a, b) => a - b).slice(0, 16)
+        const uniquePitches = notes.slice(0, 6)
         uniquePitches.forEach((midi, i) => {
             // 1. 主体：带圆角的长方体
-            const barGeo = new RoundedBoxGeometry(3, 0.4, 1, 6, 0.18)
+            // RoundedBoxGeometry各参数说明
+            // width：盒子的宽度（x轴方向）。
+            // height：盒子的高度（y轴方向）。
+            // depth：盒子的深度（z轴方向）。
+            // segments：圆角细分数（越大越圆润，推荐6~12）。
+            // radius：圆角半径（决定圆角的大小，推荐0.1~0.2）
+            const barGeo = new RoundedBoxGeometry(1, 0.4, 4, 6, 0.18)
             const barMat = new THREE.MeshPhysicalMaterial({
                 color: 0xf0f0ff,
                 metalness: 0.7,
@@ -164,29 +174,28 @@
 
             // 2. 两端孔洞（用黑色小圆柱体模拟）
             const holeRadius = 0.09
-            const holeHeight = 0.45
+            const holeHeight = 0.82
             const holeMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.8, roughness: 0.3 })
             const hole1 = new THREE.Mesh(new THREE.CylinderGeometry(holeRadius, holeRadius, holeHeight, 24), holeMat)
-            hole1.rotation.z = Math.PI / 2
-            hole1.position.set(-1.25, 0, 0)
+
+            hole1.position.set(0, -0.2, -1.5)
             bar.add(hole1)
             const hole2 = hole1.clone()
-            hole2.position.set(1.25, 0, 0)
+            hole2.position.set(0, -0.2, -0.5)
             bar.add(hole2)
 
             // 3. 支架（两根竖直黑色小圆柱体）
             const standRadius = 0.06
-            const standHeight = 0.7
+            const standHeight = 4
+            //    0x222222
             const standMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.7, roughness: 0.4 })
             const stand1 = new THREE.Mesh(
                 new THREE.CylinderGeometry(standRadius, standRadius, standHeight, 16),
                 standMat,
             )
-            stand1.position.set(-1.25, -0.55, 0)
+            stand1.rotation.x = Math.PI / 2
+            stand1.position.set(0, -0.55, -2.5)
             bar.add(stand1)
-            const stand2 = stand1.clone()
-            stand2.position.set(1.25, -0.55, 0)
-            bar.add(stand2)
 
             // 纵向排列
             bar.position.set(0, 10 - i * 2.2, 0)
@@ -233,9 +242,17 @@
     // 处理MIDI文件上传
     async function handleFileUpload(e) {
         loading.value = true
-        const file = e.target.files
-        const arrayBuffer = await file[0].arrayBuffer()
+        let arrayBuffer
+        if (!e) {
+            const response = await fetch('/如果声音不记得.mid')
+            arrayBuffer = await response.arrayBuffer()
+        } else {
+            const file = e.target.files
+            arrayBuffer = await file[0].arrayBuffer()
+        }
+
         midiData = new Midi(arrayBuffer)
+
         console.log('MIDI数据:', midiData)
         if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)()
         piano = await Soundfont.instrument(audioCtx, 'acoustic_grand_piano')
