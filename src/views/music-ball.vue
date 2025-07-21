@@ -28,7 +28,10 @@
         camera,
         controls,
         ball,
-        noteBars = []
+        pianoTimer,
+        noteBars = {},
+        notes = []
+
     let animationId = null
 
     onMounted(() => {
@@ -47,6 +50,7 @@
     onBeforeUnmount(() => {
         if (animationId) cancelAnimationFrame(animationId)
         renderer?.dispose?.()
+        clearTimeout(pianoTimer)
     })
 
     // Three.js 场景初始化
@@ -113,7 +117,7 @@
             emissiveIntensity: 2.5, // 发光强度（可调大一点）
         })
 
-        const ball = new THREE.Mesh(ballGeo, ballMat)
+        ball = new THREE.Mesh(ballGeo, ballMat)
         ball.position.set(0, 7, 0)
         scene.add(ball)
 
@@ -129,12 +133,23 @@
         ball.add(glow)
     }
     // 2. 生成纵向排列的音乐板
-    function createNoteBars(notes) {
-        noteBars.forEach((bar) => scene.remove(bar.mesh))
-        noteBars = []
-        // 取前16个不同音高
-        const uniquePitches = notes.slice(0, 6)
-        uniquePitches.forEach((midi, i) => {
+    function createNoteBars() {
+        // 获取节奏信息
+        const tempos = midiData.header.tempos
+        const bpm = tempos.length ? tempos[0].bpm : 120
+        const beatLength = 60 / bpm // 每拍秒数
+
+        // 设定路径参数
+        let yStart = 5
+        let yStep = 1.5 // 每个音符板的垂直间距
+        let curveAmplitude = 5 // 蜿蜒幅度
+        let curveFreq = 0.7 // 蜿蜒频率
+
+        notes.forEach((note, i) => {
+            // 蜿蜒路径：x轴正弦曲线，y轴递减
+            const x = Math.sin(i * curveFreq) * curveAmplitude
+            const y = yStart - i * yStep
+
             // 1. 主体：带圆角的长方体
             // RoundedBoxGeometry各参数说明
             // width：盒子的宽度（x轴方向）。
@@ -191,39 +206,47 @@
             stand2.position.set(0, -0.55, -4.5)
             bar.add(stand2)
 
-            // 纵向排列
-            bar.position.set(0, 5 - i * 2.2, 0)
+            bar.position.set(x, y, 0)
             scene.add(bar)
-            noteBars.push({ midi, mesh: bar, x: bar.position.x, y: bar.position.y })
+            noteBars[note.ticks] = { x, y }
         })
     }
+
     // 3. 小球下落动画
-    function animateBallTo(midi, jumpHeight = 6) {
-        const bar = noteBars.find((b) => b.midi === midi)
+    function animateBallTo(ticks, duration) {
+        const jumpHeight = 6
+        const bar = noteBars[ticks]
         if (!bar) return
-        // 动画参数
+
+        // 取消上一次动画，防止多次 requestAnimationFrame 堆积
+        if (animationId) cancelAnimationFrame(animationId)
+
         const startX = ball.position.x
         const endX = bar.x
         const startY = ball.position.y
         const endY = bar.y + 1.2 // 球落到板上方
-        const duration = 0.5 // 秒
-        let t = 0
-        function animate() {
-            t += 1 / 60 / duration
-            if (t > 1) t = 1
+        let startTime = null
+
+        function animate(now) {
+            if (!startTime) startTime = now
+            const elapsed = (now - startTime) / 1000
+            let t = Math.min(elapsed / duration, 1)
+
             // 抛物线插值
             ball.position.x = startX + (endX - startX) * t
-            // y轴下落，带弹跳
             ball.position.y = (1 - t) * startY + t * endY + Math.sin(Math.PI * t) * jumpHeight * (1 - t)
+
             renderer.render(scene, camera)
             if (t < 1) {
                 animationId = requestAnimationFrame(animate)
             } else {
+                ball.position.x = endX
                 ball.position.y = endY
                 renderer.render(scene, camera)
+                animationId = null
             }
         }
-        animate()
+        animationId = requestAnimationFrame(animate)
     }
 
     // 渲染循环
@@ -252,9 +275,11 @@
         piano = await Soundfont.instrument(audioCtx, 'acoustic_grand_piano')
 
         // 再生成音符条
-        const notes = []
         midiData.tracks.forEach((track) => notes.push(...track.notes))
-        createNoteBars(notes)
+        // 让所有音符的time减去最小值，实现即点即响
+        const minTime = notes[0].time
+        notes.forEach((n) => (n.time -= minTime)) //time变化会导致ticks自动变化
+        createNoteBars()
         loading.value = false
 
         renderLoop()
@@ -264,38 +289,38 @@
         if (!midiData || !piano) return
         if (audioCtx.state === 'suspended') await audioCtx.resume()
         piano.stop && piano.stop()
+        clearTimeout(pianoTimer)
 
-        // 收集所有音符
-        const notes = []
-        midiData.tracks.forEach((track) => notes.push(...track.notes))
+        // 收集所有音符并按时间排序
+
         if (notes.length === 0) return
-
-        // 让所有音符的time减去最小值，实现即点即响
-        const minTime = Math.min(...notes.map((n) => n.time))
-        notes.forEach((n) => (n.time -= minTime))
-
-        // 按时间排序
-        notes.sort((a, b) => a.time - b.time)
 
         const startTime = audioCtx.currentTime
 
         // 音符播放+小球动画
-        let noteIdx = 0
+        let preNoteTicks
+        let tempNotes = [...notes]
         function scheduleNextNote() {
-            if (noteIdx >= notes.length) return
-            const note = notes[noteIdx]
-            const when = startTime + note.time
-            const delay = Math.max(0, when - audioCtx.currentTime)
-            setTimeout(() => {
-                piano.play(note.name, audioCtx.currentTime, { gain: note.velocity, duration: note.duration })
-                animateBallTo(note.midi)
-                noteIdx++
+            const note = tempNotes.shift()
+            if (!note) return
+            if (note.ticks === preNoteTicks) {
+                preNoteTicks = note.ticks
+
+                piano.play(note.name, startTime + note.time, { gain: note.velocity, duration: note.duration })
                 scheduleNextNote()
-            }, delay * 1000)
+            } else {
+                const delay = Math.max(0, startTime + note.time - audioCtx.currentTime)
+                preNoteTicks = note.ticks
+                animateBallTo(note.ticks, delay)
+                pianoTimer = setTimeout(() => {
+                    piano.play(note.name, audioCtx.currentTime, { gain: note.velocity, duration: note.duration })
+
+                    scheduleNextNote()
+                }, delay * 1000)
+            }
         }
         scheduleNextNote()
     }
-
     function createTileTexture() {
         const size = 512
         const tile = 128
