@@ -9,6 +9,7 @@
 
 <script setup>
     import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+    import { Tween, Easing, removeAll } from '@tweenjs/tween.js'
     // ...existing code...
 
     import { ref, onMounted, onBeforeUnmount } from 'vue'
@@ -29,8 +30,10 @@
         controls,
         ball,
         pianoTimer,
-        noteBars = {},
-        notes = []
+        tween,
+        noteBars = [],
+        notes = [],
+        noteBarGroup = []
 
     let animationId = null
 
@@ -89,6 +92,12 @@
 
         scene.background = createTileTexture()
 
+        //创建组合，将小球 音符板组合在一起
+
+        if (noteBarGroup) scene.remove(noteBarGroup)
+        noteBarGroup = new THREE.Group()
+        scene.add(noteBarGroup)
+
         // 创建彩色发光球体
         const ballGeo = new THREE.SphereGeometry(0.5, 64, 64)
         const colors = []
@@ -119,7 +128,7 @@
 
         ball = new THREE.Mesh(ballGeo, ballMat)
         ball.position.set(0, 7, 0)
-        scene.add(ball)
+        noteBarGroup.add(ball)
 
         // 可选：外发光轮廓
         const glowGeo = new THREE.SphereGeometry(0.52, 64, 64)
@@ -144,114 +153,125 @@
         let yStep = 1.5 // 每个音符板的垂直间距
         let curveAmplitude = 5 // 蜿蜒幅度
         let curveFreq = 0.7 // 蜿蜒频率
+        let prevNote = { time: -10 } // 上一个音符，用于判断间隔
+        let barIndex = -1
 
         notes.forEach((note, i) => {
-            // 蜿蜒路径：x轴正弦曲线，y轴递减
-            const x = Math.sin(i * curveFreq) * curveAmplitude
-            const y = yStart - i * yStep
+            if (note.time > prevNote.time + 1) {
+                prevNote = note
+                barIndex++
+                // 蜿蜒路径：x轴正弦曲线，y轴递减
+                const x = Math.sin(barIndex * curveFreq) * curveAmplitude
+                const y = yStart - barIndex * yStep
 
-            // 1. 主体：带圆角的长方体
-            // RoundedBoxGeometry各参数说明
-            // width：盒子的宽度（x轴方向）。
-            // height：盒子的高度（y轴方向）。
-            // depth：盒子的深度（z轴方向）。
-            // segments：圆角细分数（越大越圆润，推荐6~12）。
-            // radius：圆角半径（决定圆角的大小，推荐0.1~0.2）
-            const barGeo = new RoundedBoxGeometry(1, 0.4, 4, 6, 0.18)
-            const barMat = new THREE.MeshPhysicalMaterial({
-                color: 0xf0f0ff,
-                metalness: 0.7,
-                roughness: 0.18,
-                transmission: 0.1,
-                thickness: 0.2,
-                ior: 1.2,
-                envMap: scene.environment,
-                envMapIntensity: 1.1,
-                clearcoat: 0.7,
-                clearcoatRoughness: 0.1,
-                reflectivity: 0.7,
-                sheen: 0.5,
-                sheenColor: new THREE.Color(0x99ccff),
-                sheenRoughness: 0.3,
-            })
-            const bar = new THREE.Mesh(barGeo, barMat)
+                // 1. 主体：带圆角的长方体
+                // RoundedBoxGeometry各参数说明
+                // width：盒子的宽度（x轴方向）。
+                // height：盒子的高度（y轴方向）。
+                // depth：盒子的深度（z轴方向）。
+                // segments：圆角细分数（越大越圆润，推荐6~12）。
+                // radius：圆角半径（决定圆角的大小，推荐0.1~0.2）
+                const barGeo = new RoundedBoxGeometry(1, 0.4, 4, 6, 0.18)
+                const barMat = new THREE.MeshPhysicalMaterial({
+                    color: 0xf0f0ff,
+                    metalness: 0.7,
+                    roughness: 0.18,
+                    transmission: 0.1,
+                    thickness: 0.2,
+                    ior: 1.2,
+                    envMap: scene.environment,
+                    envMapIntensity: 1.1,
+                    clearcoat: 0.7,
+                    clearcoatRoughness: 0.1,
+                    reflectivity: 0.7,
+                    sheen: 0.5,
+                    sheenColor: new THREE.Color(0x99ccff),
+                    sheenRoughness: 0.3,
+                })
+                const bar = new THREE.Mesh(barGeo, barMat)
 
-            // 2. 两端孔洞（用黑色小圆柱体模拟）
-            const holeRadius = 0.09
-            const holeHeight = 0.82
-            const holeMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.8, roughness: 0.3 })
-            const hole1 = new THREE.Mesh(new THREE.CylinderGeometry(holeRadius, holeRadius, holeHeight, 24), holeMat)
+                // 2. 两端孔洞（用黑色小圆柱体模拟）
+                const holeRadius = 0.09
+                const holeHeight = 0.82
+                const holeMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.8, roughness: 0.3 })
+                const hole1 = new THREE.Mesh(
+                    new THREE.CylinderGeometry(holeRadius, holeRadius, holeHeight, 24),
+                    holeMat,
+                )
 
-            hole1.position.set(0, -0.2, -1.5)
-            bar.add(hole1)
-            const hole2 = hole1.clone()
-            hole2.position.set(0, -0.2, -0.5)
-            bar.add(hole2)
+                hole1.position.set(0, -0.2, -1.5)
+                bar.add(hole1)
+                const hole2 = hole1.clone()
+                hole2.position.set(0, -0.2, -0.5)
+                bar.add(hole2)
 
-            // 3. 支架（两根竖直黑色小圆柱体）
-            const standRadius = 0.06
-            const standHeight = 4
-            //    0x222222
-            const standMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.7, roughness: 0.4 })
-            const stand1 = new THREE.Mesh(
-                new THREE.CylinderGeometry(standRadius, standRadius, standHeight, 16),
-                standMat,
-            )
-            stand1.rotation.x = Math.PI / 2
-            stand1.position.set(0, -0.55, -2.5)
-            bar.add(stand1)
-            // 支架底座
-            const stand2 = new THREE.Mesh(new THREE.CylinderGeometry(standRadius, standRadius * 5, 0.6, 16), standMat)
-            stand2.rotation.x = Math.PI / 2
-            stand2.position.set(0, -0.55, -4.5)
-            bar.add(stand2)
+                // 3. 支架（两根竖直黑色小圆柱体）
+                const standRadius = 0.06
+                const standHeight = 4
+                //    0x222222
+                const standMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.7, roughness: 0.4 })
+                const stand1 = new THREE.Mesh(
+                    new THREE.CylinderGeometry(standRadius, standRadius, standHeight, 16),
+                    standMat,
+                )
+                stand1.rotation.x = Math.PI / 2
+                stand1.position.set(0, -0.55, -2.5)
+                bar.add(stand1)
+                // 支架底座
+                const stand2 = new THREE.Mesh(
+                    new THREE.CylinderGeometry(standRadius, standRadius * 5, 0.6, 16),
+                    standMat,
+                )
+                stand2.rotation.x = Math.PI / 2
+                stand2.position.set(0, -0.55, -4.5)
+                bar.add(stand2)
 
-            bar.position.set(x, y, 0)
-            scene.add(bar)
-            noteBars[note.ticks] = { x, y }
+                bar.position.set(x, y, 0)
+                noteBarGroup.add(bar)
+                noteBars.push({ note, x, y })
+            }
         })
     }
 
     // 3. 小球下落动画
-    function animateBallTo(ticks, duration) {
-        const jumpHeight = 6
-        const bar = noteBars[ticks]
+    function animateBallTo(index) {
+        const bar = noteBars[index]
         if (!bar) return
 
-        // 取消上一次动画，防止多次 requestAnimationFrame 堆积
-        if (animationId) cancelAnimationFrame(animationId)
+        removeAll()
 
-        const startX = ball.position.x
-        const endX = bar.x
-        const startY = ball.position.y
-        const endY = bar.y + 1.2 // 球落到板上方
-        let startTime = null
+        // 强制用可扩展普通对象
+        const start = { x: Number(ball.position.x), y: Number(ball.position.y) }
+        const end = { x: Number(bar.x), y: Number(bar.y + 0.7) }
+        const jumpHeight = 6
+        const preNote = noteBars[index - 1]
+        const preTime = preNote ? preNote.note.time : 0
+        const duration = (bar.note.time - preTime) * 1000 || 400
 
-        function animate(now) {
-            if (!startTime) startTime = now
-            const elapsed = (now - startTime) / 1000
-            let t = Math.min(elapsed / duration, 1)
-
-            // 抛物线插值
-            ball.position.x = startX + (endX - startX) * t
-            ball.position.y = (1 - t) * startY + t * endY + Math.sin(Math.PI * t) * jumpHeight * (1 - t)
-
-            renderer.render(scene, camera)
-            if (t < 1) {
-                animationId = requestAnimationFrame(animate)
-            } else {
-                ball.position.x = endX
-                ball.position.y = endY
-                renderer.render(scene, camera)
-                animationId = null
-            }
-        }
-        animationId = requestAnimationFrame(animate)
+        let t = 0
+        tween = new Tween(start)
+            .to(end, duration)
+            .easing(Easing.Quadratic.Linear)
+            .onUpdate(function (obj) {
+                t = (obj.y - start.y) / (end.y - start.y)
+                ball.position.x = obj.x
+                ball.position.y = obj.y + Math.sin(Math.PI * t) * jumpHeight * (1 - t)
+                noteBarGroup.position.y = Math.max(0, 4 - ball.position.y)
+            })
+            .onComplete(() => {
+                ball.position.x = end.x
+                ball.position.y = end.y
+                noteBarGroup.position.y = Math.max(0, 4 - ball.position.y)
+                setTimeout(() => {
+                    animateBallTo(index + 1)
+                }, 0)
+            })
+            .start()
     }
-
     // 渲染循环
     function renderLoop() {
         controls && controls.update()
+        tween && tween.update()
         renderer.render(scene, camera)
         animationId = requestAnimationFrame(renderLoop)
     }
@@ -300,6 +320,7 @@
         // 音符播放+小球动画
         let preNoteTicks
         let tempNotes = [...notes]
+        animateBallTo(0)
         function scheduleNextNote() {
             const note = tempNotes.shift()
             if (!note) return
@@ -311,7 +332,7 @@
             } else {
                 const delay = Math.max(0, startTime + note.time - audioCtx.currentTime)
                 preNoteTicks = note.ticks
-                animateBallTo(note.ticks, delay)
+
                 pianoTimer = setTimeout(() => {
                     piano.play(note.name, audioCtx.currentTime, { gain: note.velocity, duration: note.duration })
 
